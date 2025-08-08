@@ -1,15 +1,23 @@
-# Use a lightweight Python image
-FROM python:3.9-slim
+FROM python:3.11-slim
 
-# Set working directory
+# Set work directory
 WORKDIR /app
 
-# Install dependencies
+# Install Python dependencies
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy app files
+# Copy app source
 COPY . .
 
-# Run Streamlit
-CMD ["streamlit", "run", "app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+# App Runner forwards traffic to port 8080
+EXPOSE 8080
+
+# Run Streamlit in headless mode, using port 8080
+CMD ["streamlit", "run", "app.py", \
+     "--server.port=8080", \
+     "--server.address=0.0.0.0", \
+     "--server.headless=true", \
+     "--server.enableCORS=false", \
+     "--server.enableXsrfProtection=false"]
