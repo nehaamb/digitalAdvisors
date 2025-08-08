@@ -6,6 +6,10 @@ import json
 GET_ADVICE_URL = "https://y8us2d1cd4.execute-api.us-east-1.amazonaws.com/default/digitalExperts_getAdvice"
 CHOOSE_RECOMMENDATION_URL = "https://y8us2d1cd4.execute-api.us-east-1.amazonaws.com/default/digitalExpert_chooseRecommendation"
 
+# Hardcoded S3 values
+S3_BUCKET = "clientadvisorcommunicationdata"
+S3_KEY = "communications_filtered.csv"
+
 st.set_page_config(page_title="Client Advisor Assistant", layout="centered")
 st.title("💬 Client Advisor Assistant")
 
@@ -14,21 +18,18 @@ st.markdown("Use this tool to analyze a client's conversation history and genera
 # === Input Form ===
 with st.form("advisor_form"):
     client_id = st.text_input("🔑 Client ID", placeholder="e.g., CL-000052")
-    bucket = st.text_input("🪣 S3 Bucket Name", placeholder="e.g., clientadvisorcommunicationdata")
-    key = st.text_input("📄 S3 Input Key", placeholder="e.g., communications.csv")
     current_message = st.text_area("🗣️ Current Client Message", placeholder="e.g., I want to start planning for my child’s education.")
-
     submitted = st.form_submit_button("📊 Analyze Conversation")
 
 # === Process Analysis ===
 if submitted:
-    if not (client_id and bucket and key):
-        st.warning("⚠️ Please fill in all required fields (Client ID, Bucket, Key).")
+    if not client_id:
+        st.warning("⚠️ Please fill in the Client ID.")
     else:
         request_payload = {
             "client_id": client_id,
-            "bucket": bucket,
-            "key": key,
+            "bucket": S3_BUCKET,
+            "key": S3_KEY,
             "current_message": current_message.strip()
         }
 
@@ -55,7 +56,6 @@ if submitted:
                 st.session_state["analysis"] = result
                 st.session_state["current_message"] = current_message
                 st.session_state["client_id"] = client_id
-                st.session_state["bucket"] = bucket
 
             else:
                 error_msg = response.json().get("error", "Unknown error")
@@ -77,7 +77,7 @@ if "analysis" in st.session_state:
         try:
             submit_payload = {
                 "client_id": st.session_state["client_id"],
-                "bucket": st.session_state["bucket"],
+                "bucket": S3_BUCKET,
                 "output_key": "processed_client_data.csv",
                 "sentiment_score": analysis.get("sentiment_score"),
                 "sentiment_label": analysis.get("sentiment_label"),
