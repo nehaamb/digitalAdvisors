@@ -1,0 +1,80 @@
+import json
+import boto3
+import pandas as pd
+import io
+
+s3 = boto3.client('s3')
+
+def response(status_code, body_dict):
+    return {
+        'statusCode': status_code,
+        'body': json.dumps(body_dict)
+    }
+
+def lambda_handler(event, context):
+    try:
+        # Parse body if it's a JSON string
+        if isinstance(event.get("body"), str):
+            try:
+                event = json.loads(event["body"])
+            except Exception as e:
+                return response(400, {'error': f'Invalid JSON body: {str(e)}'})
+
+        # Extract inputs
+        client_id = event.get("client_id")
+        bucket = event.get("bucket")
+        output_key = event.get("output_key", "processed_client_data.csv")
+
+        sentiment_score = event.get("sentiment_score")
+        sentiment_label = event.get("sentiment_label")
+        client_tone = event.get("client_tone", "")
+        client_intent = event.get("client_intent", "")
+        client_life_stage = event.get("client_life_stage", "")
+        recommendations = event.get("recommendations", [])
+        chosen_index = event.get("chosen_index")
+        current_message = event.get("current_message", "")
+        priority_level = event.get("priority_level", "")
+        follow_up_date = event.get("follow_up_date", "")
+
+        # Validate required fields
+        if not (client_id and bucket and recommendations and chosen_index is not None):
+            return response(400, {'error': 'Missing required fields: client_id, bucket, recommendations, chosen_index.'})
+
+        if chosen_index < 0 or chosen_index >= len(recommendations):
+            return response(400, {'error': 'Invalid chosen_index.'})
+
+        chosen_recommendation = recommendations[chosen_index]
+
+        # Prepare row to append
+        new_row = {
+            'client_id': client_id,
+            'subject': "Current Input",
+            'content': current_message,
+            'sentiment_score': sentiment_score,
+            'sentiment_label': sentiment_label,
+            'client_tone': client_tone,
+            'client_intent': client_intent,
+            'client_life_stage': client_life_stage,
+            'top_3_advisor_recommendations': ", ".join(recommendations),
+            'chosen_recommendation': chosen_recommendation,
+            'priority_level': priority_level,
+            'follow_up_date': follow_up_date
+        }
+
+        # Load existing CSV or create a new one
+        try:
+            existing_obj = s3.get_object(Bucket=bucket, Key=output_key)
+            existing_df = pd.read_csv(io.BytesIO(existing_obj['Body'].read()))
+        except s3.exceptions.NoSuchKey:
+            existing_df = pd.DataFrame(columns=new_row.keys())
+
+        # Append and upload updated CSV
+        updated_df = pd.concat([existing_df, pd.DataFrame([new_row])], ignore_index=True)
+        output_buffer = io.StringIO()
+        updated_df.to_csv(output_buffer, index=False)
+        s3.put_object(Bucket=bucket, Key=output_key, Body=output_buffer.getvalue())
+
+        return response(200, {'message': f"Recommendation saved for client {client_id}."})
+
+    except Exception as e:
+        return response(500, {'error': str(e)})
