@@ -1,0 +1,121 @@
+import json
+import boto3
+import pandas as pd
+import io
+import concurrent.futures
+
+# AWS clients
+s3 = boto3.client('s3')
+comprehend = boto3.client('comprehend')
+bedrock = boto3.client('bedrock-runtime')
+
+MODEL_ID = 'anthropic.claude-3-haiku-20240307-v1:0'
+
+def response(status_code, body_dict):
+    return {
+        'statusCode': status_code,
+        'body': json.dumps(body_dict)
+    }
+
+def build_prompt(transcript, sentiment, key_phrases):
+    return f"""
+You're a financial assistant helping advisors improve client conversations.
+
+Given the client-advisor transcript, generate:
+- Client tone
+- Client intent
+- Client life stage
+- Top 3 advisor recommendations
+
+Transcript:
+{transcript}
+
+Sentiment: {sentiment}
+Key phrases: {key_phrases}
+
+Return a valid JSON with these keys exactly:
+"client_tone", "client_intent", "client_life_stage", "top_3_advisor_recommendations","priority_level","follow_up_date"
+"""
+
+def lambda_handler(event, context):
+    try:
+        if isinstance(event.get("body"), str):
+            try:
+                event = json.loads(event["body"])
+            except Exception as e:
+                return response(400, {'error': f'Invalid JSON body: {str(e)}'})
+
+        client_id = event.get("client_id")
+        bucket = event.get("bucket")
+        key = event.get("key")
+        current_message = event.get("current_message", "").strip()
+
+        if not (client_id and bucket and key):
+            return response(400, {'error': 'Missing client_id, bucket, or key.'})
+
+        # Read historical input CSV
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        df = pd.read_csv(io.BytesIO(obj['Body'].read()))
+        df.columns = df.columns.str.strip().str.lower()
+
+        for col in ['client_id', 'subject', 'content']:
+            if col not in df.columns:
+                df[col] = ""
+
+        client_rows = df[df['client_id'].astype(str) == str(client_id)]
+        if client_rows.empty and not current_message:
+            return response(404, {'error': f'No history for client_id: {client_id} and no current message.'})
+
+        historical_transcript = " ".join(client_rows['subject'].astype(str) + " " + client_rows['content'].astype(str))
+        full_transcript = (historical_transcript + " " + current_message).strip()
+
+        # Sentiment & key phrases
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            sentiment_future = executor.submit(comprehend.detect_sentiment, Text=full_transcript, LanguageCode='en')
+            key_phrases_future = executor.submit(comprehend.detect_key_phrases, Text=full_transcript, LanguageCode='en')
+
+            sentiment_result = sentiment_future.result()
+            key_phrases_result = key_phrases_future.result()
+
+        sentiment_label = sentiment_result['Sentiment']
+        sentiment_score = sentiment_result['SentimentScore'][sentiment_label.capitalize()]
+        key_phrase_texts = [kp['Text'] for kp in key_phrases_result['KeyPhrases']]
+
+        # Generate insight from Bedrock
+        prompt = build_prompt(full_transcript, sentiment_label, key_phrase_texts)
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 1000,
+            "temperature": 0.7,
+        }
+
+        bedrock_response = bedrock.invoke_model(
+            modelId=MODEL_ID,
+            body=json.dumps(body),
+            contentType="application/json",
+            accept="application/json"
+        )
+
+        response_body = json.loads(bedrock_response['body'].read())
+        output_text = response_body['content'][0]['text'].strip()
+
+        try:
+            parsed_output = json.loads(output_text)
+        except json.JSONDecodeError:
+            return response(500, {'error': f'Claude returned invalid JSON: {output_text}'})
+
+        return response(200, {
+            'client_id': client_id,
+            'sentiment_score': sentiment_score,
+            'sentiment_label': sentiment_label,
+            'client_tone': parsed_output.get("client_tone", ""),
+            'client_intent': parsed_output.get("client_intent", ""),
+            'client_life_stage': parsed_output.get("client_life_stage", ""),
+            'recommendations': parsed_output.get("top_3_advisor_recommendations", []),
+            'priority_level' : parsed_output.get("priority_level"),
+            'follow_up_date' : parsed_output.get("follow_up_date")
+        })
+
+    except Exception as e:
+        return response(500, {'error': str(e)})
