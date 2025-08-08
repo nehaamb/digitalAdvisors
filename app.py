@@ -1,61 +1,89 @@
 import streamlit as st
-import requests
+import boto3
 import json
 
-# API Gateway endpoint for your Lambda function
-API_URL = "https://y8us2d1cd4.execute-api.us-east-1.amazonaws.com/default/digitalExperts_addAdviceWithPrev"
+# AWS Lambda client
+lambda_client = boto3.client("lambda", region_name="us-east-1")  # Change to your region
 
-st.set_page_config(page_title="Client Conversation Analyzer", layout="centered")
-st.title("💬 Client Conversation Analyzer")
+st.set_page_config(page_title="Advisor Assistant", page_icon="💬", layout="centered")
+st.title("💬 Advisor Client Conversation Assistant")
 
-st.markdown("This tool analyzes client conversations and generates smart advisor recommendations.")
+# Input section
+st.header("Step 1: Provide Client Conversation Details")
+client_id = st.text_input("Client ID")
+bucket = st.text_input("S3 Bucket Name")
+key = st.text_input("Input CSV Key in S3 (e.g., client_history.csv)")
+current_message = st.text_area("Current Client Message")
 
-# 🧾 Input fields
-with st.form("conversation_form"):
-    client_id = st.text_input("🔑 Client ID", placeholder="e.g., CL-000052")
-    bucket = st.text_input("🪣 S3 Bucket Name", placeholder="e.g., clientadvisorcommunicationdata")
-    key = st.text_input("📄 S3 Input Key", placeholder="e.g., communications.csv")
-    output_key = st.text_input("💾 Output Key (for processed file)", value="output.csv", placeholder="e.g., output.csv")
-    current_message = st.text_area("🗣️ Current Client Message (optional)", placeholder="e.g., I recently sold my business and want to plan for retirement and legacy.")
-
-    submitted = st.form_submit_button("Analyze Conversation")
-
-# 🚀 Trigger analysis
-if submitted:
-    if not (client_id and bucket and key and output_key):
-        st.warning("⚠️ Please fill in all required fields.")
+if st.button("Generate Recommendations"):
+    if not (client_id and bucket and key and current_message):
+        st.error("Please fill in all fields.")
     else:
-        payload = {
-            "client_id": client_id,
-            "bucket": bucket,
-            "key": key,
-            "output_key": output_key,
-            "current_message": current_message.strip()
-        }
+        with st.spinner("Processing conversation and generating recommendations..."):
+            payload = {
+                "client_id": client_id,
+                "bucket": bucket,
+                "key": key,
+                "current_message": current_message
+            }
+            # Invoke Lambda #1
+            response = lambda_client.invoke(
+                FunctionName="process_client_data_lambda",  # Replace with your Lambda #1 name
+                InvocationType="RequestResponse",
+                Payload=json.dumps(payload)
+            )
 
-        try:
-            response = requests.post(API_URL, json=payload)
+            result = json.loads(response['Payload'].read())
 
-            # Debug output
-            st.write("📨 Request Payload:")
-            st.code(json.dumps(payload, indent=2))
-
-            st.write("📥 Response Status Code:", response.status_code)
-
-            if response.status_code == 200:
-                result = response.json()
-                st.success("✅ Analysis complete!")
-                st.subheader("🔎 Claude's Summary")
-                st.json(result.get("summary", {}))
-
-                st.info(result.get("message", "✅ Data processed successfully."))
-
+            if result.get("statusCode") != 200:
+                st.error(f"Error: {result.get('body')}")
             else:
-                try:
-                    error = response.json().get("error", "Unknown error")
-                    st.error(f"❌ Error from Lambda: {error}")
-                except Exception:
-                    st.error(f"❌ Lambda returned a non-JSON error:\n\n{response.text}")
+                body = json.loads(result["body"])
+                summary = body.get("summary", {})
+                st.success("Recommendations generated successfully!")
+                st.write("### Conversation Insights")
+                st.json(summary)
 
-        except Exception as e:
-            st.error(f"❗ Exception occurred while calling Lambda:\n\n{str(e)}")
+                top_recommendations = summary.get("top_3_advisor_recommendations", [])
+                if isinstance(top_recommendations, str):
+                    top_recommendations = [r.strip() for r in top_recommendations.split(",")]
+
+                if top_recommendations:
+                    st.session_state["recommendations"] = top_recommendations
+                    st.session_state["client_id"] = client_id
+                    st.session_state["bucket"] = bucket
+                    st.session_state["key"] = key
+                    st.session_state["current_message"] = current_message
+                else:
+                    st.error("No recommendations returned.")
+
+# Step 2: Choose Recommendation
+if "recommendations" in st.session_state:
+    st.header("Step 2: Choose a Recommendation")
+    choice = st.selectbox(
+        "Select the best recommendation to proceed with:",
+        st.session_state["recommendations"]
+    )
+
+    if st.button("Save Selected Recommendation"):
+        with st.spinner("Saving selected recommendation..."):
+            payload = {
+                "client_id": st.session_state["client_id"],
+                "bucket": st.session_state["bucket"],
+                "key": st.session_state["key"],
+                "current_message": st.session_state["current_message"],
+                "selected_recommendation": choice
+            }
+            # Invoke Lambda #2
+            response = lambda_client.invoke(
+                FunctionName="save_selected_recommendation_lambda",  # Replace with your Lambda #2 name
+                InvocationType="RequestResponse",
+                Payload=json.dumps(payload)
+            )
+
+            result = json.loads(response['Payload'].read())
+            if result.get("statusCode") != 200:
+                st.error(f"Error: {result.get('body')}")
+            else:
+                st.success("Selected recommendation saved successfully!")
+                st.write(result["body"])
