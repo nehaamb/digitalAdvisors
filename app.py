@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import json
-from datetime import date
 
 # API Gateway endpoints
 GET_ADVICE_URL = "https://y8us2d1cd4.execute-api.us-east-1.amazonaws.com/default/digitalExperts_getAdvice"
@@ -18,10 +17,6 @@ with st.form("advisor_form"):
     bucket = st.text_input("🪣 S3 Bucket Name", placeholder="e.g., clientadvisorcommunicationdata")
     key = st.text_input("📄 S3 Input Key", placeholder="e.g., communications.csv")
     current_message = st.text_area("🗣️ Current Client Message", placeholder="e.g., I want to start planning for my child’s education.")
-    
-    # New fields
-    priority_level = st.selectbox("🔥 Priority Level", ["Low", "Medium", "High"])
-    follow_up_date = st.date_input("📅 Follow-Up Date", min_value=date.today())
 
     submitted = st.form_submit_button("📊 Analyze Conversation")
 
@@ -52,6 +47,8 @@ if submitted:
                     "Tone": result.get("client_tone"),
                     "Intent": result.get("client_intent"),
                     "Life Stage": result.get("client_life_stage"),
+                    "Priority Level": result.get("priority_level"),
+                    "Follow-Up Date": result.get("follow_up_date"),
                     "Recommendations": result.get("recommendations")
                 })
 
@@ -59,8 +56,6 @@ if submitted:
                 st.session_state["current_message"] = current_message
                 st.session_state["client_id"] = client_id
                 st.session_state["bucket"] = bucket
-                st.session_state["priority_level"] = priority_level
-                st.session_state["follow_up_date"] = follow_up_date.isoformat()
 
             else:
                 error_msg = response.json().get("error", "Unknown error")
@@ -89,11 +84,11 @@ if "analysis" in st.session_state:
                 "client_tone": analysis.get("client_tone"),
                 "client_intent": analysis.get("client_intent"),
                 "client_life_stage": analysis.get("client_life_stage"),
+                "priority_level": analysis.get("priority_level"),
+                "follow_up_date": analysis.get("follow_up_date"),
                 "recommendations": analysis.get("recommendations"),
                 "chosen_index": chosen_index,
-                "current_message": st.session_state["current_message"],
-                "priority_level": st.session_state["priority_level"],
-                "follow_up_date": st.session_state["follow_up_date"]
+                "current_message": st.session_state["current_message"]
             }
 
             st.write("📤 Submit Payload:")
